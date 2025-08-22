@@ -1,10 +1,132 @@
-ext {
-    extName = 'Manga Pro'
-    extClass = '.MangaPro'
-    themePkg = 'iken'
-    baseUrl = 'https://promanga.net'
-    overrideVersionCode = 29
-    isNsfw = false
+apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
+apply plugin: 'kotlinx-serialization'
+apply plugin: 'org.jmailen.kotlinter'
+
+// Default values for CI
+extName = ext.has("extName") ? ext.extName : "UnknownExtension"
+extClass = ext.has("extClass") ? ext.extClass : ".UnknownClass"
+extVersionCode = ext.has("extVersionCode") ? ext.extVersionCode as int : 1
+themePkg = ext.has("themePkg") ? ext.themePkg : null
+overrideVersionCode = ext.has("overrideVersionCode") ? ext.overrideVersionCode as int : 0
+isNsfw = ext.has("isNsfw") ? ext.isNsfw : false
+baseUrl = ext.has("baseUrl") ? ext.baseUrl : ""
+
+Project theme = themePkg != null ? project.findProject(":lib-multisrc:$themePkg") : null
+if (theme != null) evaluationDependsOn(theme.path)
+
+android {
+    compileSdk AndroidConfig.compileSdk
+
+    namespace "eu.kanade.tachiyomi.extension"
+    sourceSets {
+        main {
+            manifest.srcFile layout.buildDirectory.file('tempAndroidManifest.xml')
+            java.srcDirs = ['src']
+            res.srcDirs = ['res']
+            assets.srcDirs = ['assets']
+        }
+    }
+
+    defaultConfig {
+        minSdk AndroidConfig.minSdk
+        targetSdk AndroidConfig.targetSdk
+        applicationIdSuffix project.parent.name + "." + project.name
+        versionCode theme == null ? extVersionCode : theme.hasProperty("baseVersionCode") ? theme.baseVersionCode + overrideVersionCode : extVersionCode
+        versionName "1.4.$versionCode"
+
+        base {
+            archivesName = "tachiyomi-$applicationIdSuffix-v$versionName"
+        }
+
+        manifestPlaceholders = [
+                appName : "Tachiyomi: $extName",
+                extClass: extClass,
+                nsfw    : isNsfw ? 1 : 0,
+        ]
+
+        if (!baseUrl.isEmpty() && theme != null) {
+            def split = baseUrl.split("://")
+            if (split.length == 2) {
+                def path = split[1].split("/")
+                manifestPlaceholders += [
+                        SOURCEHOST  : path[0],
+                        SOURCESCHEME: split[0],
+                ]
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            def storeFilePath = rootProject.file("signingkey.jks")
+            if (storeFilePath.exists()) {
+                storeFile storeFilePath
+                storePassword System.getenv("KEY_STORE_PASSWORD") ?: ""
+                keyAlias System.getenv("ALIAS") ?: ""
+                keyPassword System.getenv("KEY_PASSWORD") ?: ""
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    packaging {
+        resources.excludes.add("kotlin-tooling-metadata.json")
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_1_8.toString()
+        freeCompilerArgs += "-opt-in=kotlinx.serialization.ExperimentalSerializationApi"
+    }
+
+    kotlinter {
+        experimentalRules = true
+        disabledRules = [
+            "experimental:argument-list-wrapping",
+            "experimental:comment-wrapping",
+        ]
+    }
 }
 
-apply from: "$rootDir/common.gradle"
+dependencies {
+    if (theme != null) implementation(theme)
+    implementation(project(":core"))
+    compileOnly(libs.bundles.common)
+}
+
+// Tasks for manifest file
+tasks.register("copyManifestFile", Copy) {
+    from 'AndroidManifest.xml'
+    rename { 'tempAndroidManifest.xml' }
+    into layout.buildDirectory
+}
+
+tasks.register("writeManifestFile") {
+    dependsOn(copyManifestFile)
+    doLast {
+        File tempFile = android.sourceSets.getByName('main').manifest.srcFile
+        if (!tempFile.exists()) {
+            tempFile.write('<?xml version="1.0" encoding="utf-8"?>\n<manifest />\n')
+        }
+    }
+}
+
+preBuild.dependsOn(writeManifestFile, lintKotlin)
+if (System.getenv("CI") != "true") {
+    lintKotlin.dependsOn(formatKotlin)
+}
