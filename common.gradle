@@ -8,13 +8,14 @@ assert !ext.has("libVersion")
 
 assert extName.chars().max().asInt < 0x180 : "Extension name should be romanized"
 
-Project theme = ext.has("themePkg") ? project(":lib-multisrc:$themePkg") : null
+Project theme = ext.has("themePkg") ? project.findProject(":lib-multisrc:$themePkg") : null
 if (theme != null) evaluationDependsOn(theme.path)
 
 android {
     compileSdk AndroidConfig.compileSdk
 
     namespace "eu.kanade.tachiyomi.extension"
+
     sourceSets {
         main {
             manifest.srcFile layout.buildDirectory.file('tempAndroidManifest.xml')
@@ -27,27 +28,36 @@ android {
     defaultConfig {
         minSdk AndroidConfig.minSdk
         targetSdk AndroidConfig.targetSdk
-        applicationIdSuffix project.parent.name + "." + project.name
-        versionCode theme == null ? extVersionCode : theme.baseVersionCode + overrideVersionCode
-        versionName "1.4.$versionCode"
+
+        // Safely handle project.parent being null
+        def parentName = project.parent != null ? project.parent.name : "defaultParent"
+        applicationIdSuffix parentName + "." + project.name
+
+        // Safely handle theme
+        versionCode = (theme != null && theme.hasProperty("baseVersionCode") ? theme.baseVersionCode + overrideVersionCode : extVersionCode)
+        versionName = "1.4.$versionCode"
+
         base {
             archivesName = "tachiyomi-$applicationIdSuffix-v$versionName"
         }
+
         assert extClass.startsWith(".")
         manifestPlaceholders = [
                 appName : "Tachiyomi: $extName",
                 extClass: extClass,
                 nsfw    : project.ext.find("isNsfw") ? 1 : 0,
         ]
+
         String baseUrl = project.ext.find("baseUrl") ?: ""
         if (theme != null && !baseUrl.isEmpty()) {
             def split = baseUrl.split("://")
-            assert split.length == 2
-            def path = split[1].split("/")
-            manifestPlaceholders += [
-                    SOURCEHOST  : path[0],
-                    SOURCESCHEME: split[0],
-            ]
+            if (split.length == 2) {
+                def path = split[1].split("/")
+                manifestPlaceholders += [
+                        SOURCEHOST  : path[0],
+                        SOURCESCHEME: split[0],
+                ]
+            }
         }
     }
 
@@ -80,7 +90,6 @@ android {
         resources.excludes.add("kotlin-tooling-metadata.json")
     }
 
-    // https://stackoverflow.com/a/77745844
     tasks.withType(com.android.build.gradle.tasks.PackageAndroidArtifact).configureEach {
         doFirst { appMetadata.asFile.getOrNull()?.write('') }
     }
@@ -98,14 +107,14 @@ android {
     kotlinter {
         experimentalRules = true
         disabledRules = [
-            "experimental:argument-list-wrapping", // Doesn't play well with Android Studio
+            "experimental:argument-list-wrapping",
             "experimental:comment-wrapping",
         ]
     }
 }
 
 dependencies {
-    if (theme != null) implementation(theme) // Overrides core launcher icons
+    if (theme != null) implementation(theme)
     implementation(project(":core"))
     compileOnly(libs.bundles.common)
 }
